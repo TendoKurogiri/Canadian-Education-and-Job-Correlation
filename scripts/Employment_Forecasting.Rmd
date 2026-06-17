@@ -1,0 +1,341 @@
+# ===================================================================
+# COMPREHENSIVE EMPLOYMENT FORECASTING FOR COLLEGE & UNIVERSITY STUDENTS
+# Multiple metrics, all ages, 10-year forecast, linear regression
+# ===================================================================
+```{r}
+
+# === Setup ===
+req_pkgs <- c("readr","dplyr","stringr","ggplot2","tidyr","scales","patchwork")
+to_install <- setdiff(req_pkgs, rownames(installed.packages()))
+if (length(to_install) > 0) install.packages(to_install)
+lapply(req_pkgs, library, character.only = TRUE)
+
+# === Load data ===
+data_path <- "Employed and Unemployed Dataset.csv"
+raw <- readr::read_csv(data_path, show_col_types = FALSE)
+
+# === Define target metrics ===
+# Note: "Student unemployed or Other" combines unemployed with other categories
+target_metrics <- c(
+  "University student employed",
+  "College student employed",
+  "Student unemployed or Other"  # This includes both college & university unemployed
+)
+
+# === Filter and aggregate across ALL age groups ===
+# Keep high-quality data and aggregate across all individual ages
+filtered <- raw %>%
+  filter(
+    `Labour force status of students and non-students` %in% target_metrics,
+    is.na(SYMBOL) | SYMBOL != "x",  # Exclude missing
+    is.na(STATUS) | STATUS %in% c("A","B"),  # Keep best quality
+    !is.na(VALUE)
+  ) %>%
+  mutate(
+    Year = as.integer(stringr::str_sub(REF_DATE, 1, 4)),
+    Metric = `Labour force status of students and non-students`
+  ) %>%
+  # Aggregate across all age groups for each metric and year
+  group_by(Year, Metric) %>%
+  summarise(
+    Rate = mean(VALUE, na.rm = TRUE),  # Average rate across age groups
+    .groups = "drop"
+  ) %>%
+  arrange(Metric, Year)
+
+# Check how many data points per metric
+data_summary <- filtered %>%
+  group_by(Metric) %>%
+  summarise(n_periods = n(), .groups = "drop")
+
+print("=== Data Summary ===")
+print(data_summary)
+
+# === Create separate datasets for each metric ===
+univ_employed <- filtered %>% filter(Metric == "University student employed")
+college_employed <- filtered %>% filter(Metric == "College student employed")
+student_unemployed <- filtered %>% filter(Metric == "Student unemployed or Other")
+
+# === Fit linear models for each ===
+model_univ_emp <- lm(Rate ~ Year, data = univ_employed)
+model_coll_emp <- lm(Rate ~ Year, data = college_employed)
+model_stud_unemp <- lm(Rate ~ Year, data = student_unemployed)
+
+# === Generate 10-year forecasts ===
+horizon <- 10
+last_year <- max(filtered$Year, na.rm = TRUE)
+future_years <- data.frame(Year = seq.int(last_year + 1, last_year + horizon))
+
+# Function to generate forecast with intervals
+generate_forecast <- function(model, metric_name, historical_data, future_years) {
+  # In-sample fitted
+  hist_fit <- cbind(
+    historical_data,
+    predict(model, newdata = historical_data, interval = "confidence", level = 0.95)
+  )
+  names(hist_fit)[(ncol(hist_fit)-2):ncol(hist_fit)] <- c("fit","lwr","upr")
+  hist_fit$Type <- "Historical"
+  
+  # Future forecast with prediction intervals
+  fc_pred <- cbind(
+    future_years,
+    as.data.frame(predict(model, newdata = future_years, interval = "prediction", level = 0.95))
+  )
+  names(fc_pred)[2:4] <- c("fit","lwr","upr")
+  fc_pred$Metric <- metric_name
+  fc_pred$Type <- "Forecast"
+  
+  list(historical = hist_fit, forecast = fc_pred)
+}
+
+# Generate forecasts for all metrics
+fc_univ_emp <- generate_forecast(model_univ_emp, "University student employed", univ_employed, future_years)
+fc_coll_emp <- generate_forecast(model_coll_emp, "College student employed", college_employed, future_years)
+fc_stud_unemp <- generate_forecast(model_stud_unemp, "Student unemployed or Other", student_unemployed, future_years)
+
+# === Print model summaries ===
+cat("\n=== MODEL SUMMARIES ===\n\n")
+
+cat("1. UNIVERSITY STUDENTS EMPLOYED\n")
+print(summary(model_univ_emp))
+cat("\n")
+
+cat("2. COLLEGE STUDENTS EMPLOYED\n")
+print(summary(model_coll_emp))
+cat("\n")
+
+cat("3. STUDENTS UNEMPLOYED OR OTHER\n")
+print(summary(model_stud_unemp))
+cat("\n")
+
+# === Print forecast tables ===
+cat("\n=== 10-YEAR FORECASTS ===\n\n")
+
+print_forecast_table <- function(fc_data, title) {
+  cat(paste0("\n", title, "\n"))
+  cat(paste0(rep("-", nchar(title)), collapse = ""), "\n")
+  fc_table <- fc_data$forecast %>%
+    transmute(
+      Year,
+      Forecast = round(fit, 2),
+      Lower_95CI = round(lwr, 2),
+      Upper_95CI = round(upr, 2)
+    )
+  print(fc_table, row.names = FALSE)
+}
+
+print_forecast_table(fc_univ_emp, "University Students Employed (%)")
+print_forecast_table(fc_coll_emp, "College Students Employed (%)")
+print_forecast_table(fc_stud_unemp, "Students Unemployed or Other (%)")
+
+# ===================================================================
+# VISUALIZATION: Create 3 graphs with logical groupings
+# ===================================================================
+
+# === GRAPH 1: University vs College (EMPLOYED comparison) ===
+plot_data_employed <- bind_rows(
+  fc_univ_emp$historical %>% mutate(Metric = "University"),
+  fc_univ_emp$forecast %>% select(-Metric) %>% mutate(Metric = "University", Rate = NA),
+  fc_coll_emp$historical %>% mutate(Metric = "College"),
+  fc_coll_emp$forecast %>% select(-Metric) %>% mutate(Metric = "College", Rate = NA)
+)
+
+p1 <- ggplot() +
+  # Historical points
+  geom_point(
+    data = plot_data_employed %>% filter(Type == "Historical"),
+    aes(x = Year, y = Rate, color = Metric),
+    size = 2.5
+  ) +
+  # Historical fitted lines
+  geom_line(
+    data = plot_data_employed %>% filter(Type == "Historical"),
+    aes(x = Year, y = fit, color = Metric),
+    linewidth = 1
+  ) +
+  # Forecast lines
+  geom_line(
+    data = plot_data_employed %>% filter(Type == "Forecast"),
+    aes(x = Year, y = fit, color = Metric),
+    linewidth = 1,
+    linetype = "dashed"
+  ) +
+  # Prediction intervals (shaded)
+  geom_ribbon(
+    data = plot_data_employed %>% filter(Type == "Forecast"),
+    aes(x = Year, ymin = lwr, ymax = upr, fill = Metric),
+    alpha = 0.15
+  ) +
+  scale_color_manual(values = c("University" = "#1f77b4", "College" = "#ff7f0e")) +
+  scale_fill_manual(values = c("University" = "#1f77b4", "College" = "#ff7f0e")) +
+  scale_y_continuous(labels = label_number(suffix = "%")) +
+  labs(
+    title = "Employment Rates: University vs. College Students",
+    subtitle = "10-year forecast with 95% prediction intervals",
+    x = "Year",
+    y = "Employment Rate (%)",
+    color = "Student Type",
+    fill = "Student Type"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+
+# === GRAPH 2: Employed vs Unemployed (UNIVERSITY students) ===
+plot_data_univ <- bind_rows(
+  fc_univ_emp$historical %>% mutate(Status = "Employed"),
+  fc_univ_emp$forecast %>% select(-Metric) %>% mutate(Status = "Employed", Rate = NA),
+  fc_stud_unemp$historical %>% mutate(Status = "Unemployed/Other"),
+  fc_stud_unemp$forecast %>% select(-Metric) %>% mutate(Status = "Unemployed/Other", Rate = NA)
+)
+
+p2 <- ggplot() +
+  geom_point(
+    data = plot_data_univ %>% filter(Type == "Historical"),
+    aes(x = Year, y = Rate, color = Status),
+    size = 2.5
+  ) +
+  geom_line(
+    data = plot_data_univ %>% filter(Type == "Historical"),
+    aes(x = Year, y = fit, color = Status),
+    linewidth = 1
+  ) +
+  geom_line(
+    data = plot_data_univ %>% filter(Type == "Forecast"),
+    aes(x = Year, y = fit, color = Status),
+    linewidth = 1,
+    linetype = "dashed"
+  ) +
+  geom_ribbon(
+    data = plot_data_univ %>% filter(Type == "Forecast"),
+    aes(x = Year, ymin = lwr, ymax = upr, fill = Status),
+    alpha = 0.15
+  ) +
+  scale_color_manual(values = c("Employed" = "#2ca02c", "Unemployed/Other" = "#d62728")) +
+  scale_fill_manual(values = c("Employed" = "#2ca02c", "Unemployed/Other" = "#d62728")) +
+  scale_y_continuous(labels = label_number(suffix = "%")) +
+  labs(
+    title = "Student Employment Status Comparison",
+    subtitle = "University students employed vs. all students unemployed/other (10-year forecast)",
+    x = "Year",
+    y = "Rate (%)",
+    color = "Status",
+    fill = "Status"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+
+# === GRAPH 3: ALL FOUR METRICS (Combined overview) ===
+plot_data_all <- bind_rows(
+  fc_univ_emp$historical %>% mutate(Metric_Label = "Univ Employed"),
+  fc_univ_emp$forecast %>% mutate(Rate = NA, Metric_Label = "Univ Employed"),
+  fc_coll_emp$historical %>% mutate(Metric_Label = "College Employed"),
+  fc_coll_emp$forecast %>% mutate(Rate = NA, Metric_Label = "College Employed"),
+  fc_stud_unemp$historical %>% mutate(Metric_Label = "Unemployed/Other"),
+  fc_stud_unemp$forecast %>% mutate(Rate = NA, Metric_Label = "Unemployed/Other")
+)
+
+p3 <- ggplot() +
+  geom_point(
+    data = plot_data_all %>% filter(Type == "Historical"),
+    aes(x = Year, y = Rate, color = Metric_Label),
+    size = 2
+  ) +
+  geom_line(
+    data = plot_data_all %>% filter(Type == "Historical"),
+    aes(x = Year, y = fit, color = Metric_Label),
+    linewidth = 0.9
+  ) +
+  geom_line(
+    data = plot_data_all %>% filter(Type == "Forecast"),
+    aes(x = Year, y = fit, color = Metric_Label),
+    linewidth = 0.9,
+    linetype = "dashed"
+  ) +
+  geom_ribbon(
+    data = plot_data_all %>% filter(Type == "Forecast"),
+    aes(x = Year, ymin = lwr, ymax = upr, fill = Metric_Label),
+    alpha = 0.12
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  scale_fill_brewer(palette = "Set1") +
+  scale_y_continuous(labels = label_number(suffix = "%")) +
+  labs(
+    title = "All Student Employment Metrics: 10-Year Forecast",
+    subtitle = "University employed, college employed, and unemployed/other students",
+    x = "Year",
+    y = "Rate (%)",
+    color = "Metric",
+    fill = "Metric"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+# === Display all plots ===
+print(p1)
+print(p2)
+print(p3)
+
+# Optional: Combine plots using patchwork
+# combined_plot <- (p1 / p2) | p3
+# print(combined_plot)
+
+# === Save results to CSV ===
+forecast_results <- bind_rows(
+  fc_univ_emp$forecast %>% mutate(Metric = "University student employed"),
+  fc_coll_emp$forecast %>% mutate(Metric = "College student employed"),
+  fc_stud_unemp$forecast %>% mutate(Metric = "Student unemployed or Other")
+) %>%
+  select(Metric, Year, Forecast = fit, Lower_95CI = lwr, Upper_95CI = upr) %>%
+  mutate(across(c(Forecast, Lower_95CI, Upper_95CI), ~ round(.x, 2)))
+
+readr::write_csv(forecast_results, "student_employment_forecasts_10yr.csv")
+cat("\n✓ Forecast results saved to: student_employment_forecasts_10yr.csv\n")
+
+# === Summary statistics ===
+cat("\n=== TREND ANALYSIS ===\n")
+trend_summary <- data.frame(
+  Metric = c("University Employed", "College Employed", "Unemployed/Other"),
+  Slope_Per_Year = c(
+    coef(model_univ_emp),
+    coef(model_coll_emp),
+    coef(model_stud_unemp)
+  ),
+  R_Squared = c(
+    summary(model_univ_emp)$r.squared,
+    summary(model_coll_emp)$r.squared,
+    summary(model_stud_unemp)$r.squared
+  ),
+  P_Value = c(
+    summary(model_univ_emp)$coefficients[2,4],
+    summary(model_coll_emp)$coefficients[2,4],
+    summary(model_stud_unemp)$coefficients[2,4]
+  )
+) %>%
+  mutate(
+    Slope_Per_Year = round(Slope_Per_Year, 4),
+    R_Squared = round(R_Squared, 3),
+    P_Value = round(P_Value, 4),
+    Trend_Direction = ifelse(Slope_Per_Year > 0, "↑ Increasing", "↓ Decreasing"),
+    Significance = ifelse(P_Value < 0.05, "Significant", "Not significant")
+  )
+
+print(trend_summary)
+
+cat("\n=== COMPLETE ===\n")
+cat("Generated 3 plots:\n")
+cat("  1. University vs College (Employed comparison)\n")
+cat("  2. Employed vs Unemployed (All students)\n")
+cat("  3. All metrics combined (Overview)\n")
+cat("\nForecasts extend 10 years into the future with 95% prediction intervals.\n")
+
+# === Save plots as PNG ===
+ggplot2::ggsave("employment_university_vs_college.png", plot = p1,
+                width = 8, height = 5, dpi = 300)
+
+ggplot2::ggsave("employment_status_comparison.png", plot = p2,
+                width = 8, height = 5, dpi = 300)
+
+ggplot2::ggsave("employment_all_metrics_10yr.png", plot = p3,
+                width = 8, height = 5, dpi = 300)
+
+```
