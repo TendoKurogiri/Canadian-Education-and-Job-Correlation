@@ -1,7 +1,7 @@
 # Canadian Education & Employment Analysis 
 
 ## Project Overview
-[cite_start]This project provides an estimate of the impact of education on employability, financial returns, and related factors in the Canadian job market using the National Graduates Survey conducted by Statistics Canada[cite: 3]. [cite_start]By analyzing over 13,000 cases [cite: 4][cite_start], this repository highlights the role of education in shaping jobs and opportunities across different fields in Canada, while also examining the influence of immigration status[cite: 12].
+This project provides an estimate of the impact of education on employability, financial returns, and related factors in the Canadian job market using the National Graduates Survey conducted by Statistics Canada[cite: 3]. [cite_start]By analyzing over 13,000 cases [cite: 4][cite_start], this repository highlights the role of education in shaping jobs and opportunities across different fields in Canada, while also examining the influence of immigration status[cite: 12].
 
 ## Key Findings
 * [cite_start]**Financial ROI:** There is a moderate direct positive correlation (score: 0.34) between the level of study and personal income[cite: 61]. [cite_start]The regression model indicates an average increase in earnings of $12,235 per year for each level of educational attainment[cite: 68].
