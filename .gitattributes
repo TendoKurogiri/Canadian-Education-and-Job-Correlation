@@ -1,1 +1,5 @@
+# Force RMarkdown to be counted as R code
 *.Rmd linguist-language=R
+
+# Force Python files to be explicitly counted and tracked
+*.py linguist-language=Python
